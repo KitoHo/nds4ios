@@ -68,6 +68,16 @@
 - (void)viewDidAppear:(BOOL)animated
 {
     [CHBgDropboxSync start];
+    //TODO: add back the + button, but just have it pop up this UIAlert instead
+    if(![[NSUserDefaults standardUserDefaults] boolForKey:@"firstLaunch"]) {
+        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"IMPORTANT"
+                                                        message:@"We have recently removed the '+' button from nds4ios for safety reasons. If you are unsure how to add ROMs to nds4ios, please tap on 'Tutorial'. Otherwise, Tap on 'OK' to dismiss this one-time dialog."
+                                                       delegate:self
+                                              cancelButtonTitle:@"OK"
+                                              otherButtonTitles:@"Tutorial", nil];
+        [alert show];
+    }
+    
 }
 
 - (void)viewWillAppear:(BOOL)animated
@@ -162,6 +172,16 @@
 
 //#pragma mark - Non-UITableView functions
 
-//#pragma mark - UIAlertView delegate
+#pragma mark - UIAlertView delegate
+
+-(void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
+{
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"firstLaunch"];
+    if( buttonIndex == 1 )
+    {
+        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://github.com/InfiniDev/nds4ios#adding-roms-to-nds4ios"]];
+    }
+}
+
 
 @end

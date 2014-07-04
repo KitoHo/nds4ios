@@ -20,8 +20,6 @@
     return [[UIApplication sharedApplication] delegate];
 }
 
-
-
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
     if ([UIDevice currentDevice].systemVersion.floatValue >= 7.0f)
