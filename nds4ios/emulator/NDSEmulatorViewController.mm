@@ -16,8 +16,10 @@
 #import <GLKit/GLKit.h>
 #import <OpenGLES/ES2/gl.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <GameController/GameController.h>
 
 #include "emu.h"
+#include "throttle.h"
 
 #import "NDSMFIControllerSupport.h"
 
@@ -89,13 +91,14 @@ const float textureVert[] =
 @property (weak, nonatomic) IBOutlet UIImageView *pixelGrid;
 @property (strong, nonatomic) GLProgram *program;
 @property (strong, nonatomic) EAGLContext *context;
-@property (weak, nonatomic) IBOutlet UIView *controllerContainerView;
+@property (strong, nonatomic) IBOutlet UIView *controllerContainerView;
 
 @property (weak, nonatomic) IBOutlet NDSDirectionalControl *directionalControl;
 @property (weak, nonatomic) IBOutlet NDSButtonControl *buttonControl;
 @property (weak, nonatomic) IBOutlet UIButton *dismissButton;
 @property (weak, nonatomic) IBOutlet UIButton *startButton;
 @property (weak, nonatomic) IBOutlet UIButton *selectButton;
+@property (weak, nonatomic) IBOutlet UIButton *fastForwardButton;
 @property (strong, nonatomic) UIImageView *snapshotView;
 
 - (IBAction)hideEmulator:(id)sender;
@@ -125,11 +128,17 @@ const float textureVert[] =
     self.view.multipleTouchEnabled = YES;
     
     NSNotificationCenter *notificationCenter = [NSNotificationCenter defaultCenter];
-    [notificationCenter addObserver:self selector:@selector(pauseEmulation) name:UIApplicationWillResignActiveNotification object:nil];
-    [notificationCenter addObserver:self selector:@selector(resumeEmulation) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [notificationCenter addObserver:self selector:@selector(willBackground) name:UIApplicationWillResignActiveNotification object:nil];
+    [notificationCenter addObserver:self selector:@selector(resumeEmulationWithDelay) name:UIApplicationDidBecomeActiveNotification object:nil];
     [notificationCenter addObserver:self selector:@selector(defaultsChanged:) name:NSUserDefaultsDidChangeNotification object:nil];
     [notificationCenter addObserver:self selector:@selector(screenChanged:) name:UIScreenDidConnectNotification object:nil];
     [notificationCenter addObserver:self selector:@selector(screenChanged:) name:UIScreenDidDisconnectNotification object:nil];
+    [notificationCenter addObserver:self selector:@selector(controllerActivated:) name:GCControllerDidConnectNotification object:nil];
+    [notificationCenter addObserver:self selector:@selector(controllerDeactivated:) name:GCControllerDidDisconnectNotification object:nil];
+    
+    if ([[GCController controllers] count] > 0) {
+        [self controllerActivated:nil];
+    }
     
     [self defaultsChanged:nil];
 }
@@ -142,7 +151,7 @@ const float textureVert[] =
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [self pauseEmulation];
-    [self saveStateWithName:nil];
+    [self saveStateWithName: [NSString stringWithFormat: @"auto-%@", [NSDate date]]];
     [UIApplication sharedApplication].statusBarHidden = NO;
 }
 
@@ -200,6 +209,7 @@ const float textureVert[] =
             self.buttonControl.center = CGPointMake(self.view.bounds.size.width-66, self.view.bounds.size.height-128);
             self.startButton.center = CGPointMake(self.view.bounds.size.width-102, self.view.bounds.size.height-48);
             self.selectButton.center = CGPointMake(self.view.bounds.size.width-102, self.view.bounds.size.height-16);
+            self.fastForwardButton.center = CGPointMake(102, self.view.bounds.size.height-16);
             self.controllerContainerView.alpha = self.dismissButton.alpha = 1.0;
             self.fpsLabel.frame = CGRectMake(70, 0, 70, 24);
         } else if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
@@ -209,6 +219,7 @@ const float textureVert[] =
             self.buttonControl.center = CGPointMake(self.view.bounds.size.width-66, 150);
             self.startButton.center = CGPointMake(self.view.bounds.size.width-102, 258);
             self.selectButton.center = CGPointMake(self.view.bounds.size.width-102, 226);
+            self.fastForwardButton.center = CGPointMake(102, 258);
             self.controllerContainerView.alpha = self.dismissButton.alpha = 1.0;
             self.fpsLabel.frame = CGRectMake(185, 5, 70, 24);
         }
@@ -219,12 +230,14 @@ const float textureVert[] =
             self.controllerContainerView.frame = CGRectMake(0, [defaults integerForKey:@"controlPosition"] == 0 ? 0 : 240 + (88 * isWidescreen), self.view.bounds.size.width, 240);
             self.startButton.center = CGPointMake((self.view.bounds.size.width/2)-40, 228);
             self.selectButton.center = CGPointMake((self.view.bounds.size.width/2)+40, 228);
+            self.fastForwardButton.center = CGPointMake((self.view.bounds.size.width/2), 198);
             self.dismissButton.frame = CGRectMake((self.view.bounds.size.width/2)-14, 0, 28, 28);
         } else if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
         {
             self.controllerContainerView.frame = CGRectMake(0, [defaults integerForKey:@"controlPosition"] == 0? 230 : 660 + (88 * isWidescreen), self.view.bounds.size.width, 360);
             self.startButton.center = CGPointMake(25, 300);
             self.selectButton.center = CGPointMake(self.view.bounds.size.width-25, 300);
+            self.fastForwardButton.center = CGPointMake((self.view.bounds.size.width-25), 270);
             self.dismissButton.frame = CGRectMake(self.view.bounds.size.width-35, 5, 28, 28);
         }
         self.directionalControl.center = CGPointMake(60, 172);
@@ -380,6 +393,16 @@ const float textureVert[] =
     return image;
 }
 
+- (void) willBackground
+{
+    UIBackgroundTaskIdentifier taskID = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+        NSLog(@"Background task expiring");
+        }];
+    [self saveStateWithName: [NSString stringWithFormat: @"auto-%@", [NSDate date]]];
+    [self pauseEmulation];
+    [[UIApplication sharedApplication] endBackgroundTask: taskID];
+}
+
 - (void)pauseEmulation
 {
     if (!execute) return;
@@ -397,6 +420,11 @@ const float textureVert[] =
     [emuLoopLock lock]; // make sure emulator loop has ended
     [emuLoopLock unlock];
     [self shutdownGL];
+}
+
+- (void) resumeEmulationWithDelay
+{
+    [self performSelector: @selector(resumeEmulation) withObject: nil afterDelay: 1];
 }
 
 - (void)resumeEmulation
@@ -469,6 +497,23 @@ const float textureVert[] =
 }
 
 #pragma mark - Controls
+
+- (void)controllerActivated:(NSNotification *)notification {
+    if (_controllerContainerView.superview) {
+        [_controllerContainerView removeFromSuperview];
+    }
+}
+
+- (void)controllerDeactivated:(NSNotification *)notification {
+    if ([[GCController controllers] count] == 0) {
+        CGRect controllerContainerFrame = _controllerContainerView.frame;
+        controllerContainerFrame.origin.x = 0;
+        controllerContainerFrame.origin.y = self.view.frame.size.height-controllerContainerFrame.size.height;
+        controllerContainerFrame.size.width = self.view.frame.size.width;
+        _controllerContainerView.frame = controllerContainerFrame;
+        [self.view addSubview:_controllerContainerView];
+    }
+}
 
 - (IBAction)pressedDPad:(NDSDirectionalControl *)sender
 {
@@ -574,6 +619,16 @@ FOUNDATION_EXTERN void AudioServicesPlaySystemSoundWithVibration(unsigned long, 
     UIAlertView *saveAlert = [[UIAlertView alloc] initWithTitle:@"Save State" message:@"Name for save state:" delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Save", nil];
     saveAlert.alertViewStyle = UIAlertViewStylePlainTextInput;
     [saveAlert show];
+}
+
+- (IBAction)fastForwardBegin:(id)sender
+{
+    FastForward = 1;
+}
+
+- (IBAction)fastForwardEnd:(id)sender
+{
+    FastForward = 0;
 }
 
 #pragma mark Alert View Delegate
